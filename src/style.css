@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-primary: theme('colors.primary');
+  --color-accent: theme('colors.accent');
+  --color-background: theme('colors.background');
+  --color-surface: theme('colors.surface');
+  --color-textPrimary: theme('colors.textPrimary');
+  --color-textSecondary: theme('colors.textSecondary');
+  --color-gradientStart: theme('colors.gradientStart');
+  --color-gradientEnd: theme('colors.gradientEnd');
+}
+
+body {
+  @apply bg-background text-textPrimary min-h-screen;
+}
+
+#app {
+  @apply max-w-7xl mx-auto;
+}
