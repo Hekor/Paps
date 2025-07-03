@@ -98,8 +98,8 @@
               <p class="added-by">
                 Added by: {{ getUserDisplayName(item.added_by) }}
                 <img 
-                  v-if="userProfiles[item.added_by.id]?.images && userProfiles[item.added_by.id].images.length > 0" 
-                  :src="userProfiles[item.added_by.id].images[0].url" 
+                  v-if="userProfiles[item.added_by.id]?.images && (userProfiles[item.added_by.id]?.images || []).length > 0"
+                  :src="userProfiles[item.added_by.id]!.images![0].url"
                   class="user-avatar"
                   alt="User avatar"
                 >

@@ -38,7 +38,7 @@ const router = createRouter({
 // Navigation guard to check authentication for protected routes
 import { useAuthStore } from './stores/auth';
 
-router.beforeEach((to, from, next) => {
+router.beforeEach((to, _, next) => {
   const authStore = useAuthStore();
 
   // Check if the route requires authentication

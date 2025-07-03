@@ -86,7 +86,7 @@
             <div class="track-actions">
               <button @click="moveTrackUp(index)" :disabled="index === 0">Move Up</button>
               <button @click="moveTrackDown(index)" :disabled="index === tracks.length - 1">Move Down</button>
-              <button @click="removeTrack(item.track.uri, index)">Remove</button>
+              <button @click="removeTrack(item.track.uri)">Remove</button>
             </div>
           </div>
         </div>
@@ -271,7 +271,7 @@ async function moveTrackDown(index: number) {
 }
 
 // Remove a track
-async function removeTrack(trackUri: string, index: number) {
+async function removeTrack(trackUri: string) {
   if (!selectedPlaylist.value) return;
 
   try {

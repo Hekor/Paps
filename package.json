@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
+    "postbuild": "powershell copy-item -path dist\\index.html -destination dist\\404.html",
     "preview": "vite preview"
   },
   "dependencies": {
