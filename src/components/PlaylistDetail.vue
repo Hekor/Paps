@@ -52,28 +52,25 @@
         >
           Stats
         </button>
+        <button 
+          :class="{ active: activeTab === 'playtimeShuffle' }" 
+          @click="activeTab = 'playtimeShuffle'"
+        >
+          Playtime Shuffle
+        </button>
       </div>
 
       <div v-if="activeTab === 'tracks'" class="tab-content">
-        <div class="pagination">
-          <button 
-            :disabled="trackOffset === 0" 
-            @click="fetchPreviousTracks"
-          >
-            Previous
-          </button>
-          <span>{{ trackOffset + 1 }}-{{ Math.min(trackOffset + trackLimit, totalTracks) }} of {{ totalTracks }}</span>
-          <button 
-            :disabled="trackOffset + trackLimit >= totalTracks" 
-            @click="fetchNextTracks"
-          >
-            Next
-          </button>
+        <div class="tracks-info">
+          <span>{{ tracks.length }} of {{ totalTracks }} tracks loaded</span>
         </div>
 
         <div class="tracks-list">
           <div v-for="(item, index) in tracks" :key="index" class="track-item">
-            <div class="track-info">
+            <div class="track-number">
+              {{ index + 1 }}
+            </div>
+            <div class="track-info-left">
               <h4>
                 <a 
                   href="#" 
@@ -94,6 +91,8 @@
                   </a>{{ i < item.track.artists.length - 1 ? ', ' : '' }}
                 </template>
               </p>
+            </div>
+            <div class="track-info-right">
               <p class="track-duration">{{ formatDuration(item.track.duration_ms) }}</p>
               <p class="added-by">
                 Added by: {{ getUserDisplayName(item.added_by) }}
@@ -104,6 +103,17 @@
                   alt="User avatar"
                 >
               </p>
+            </div>
+          </div>
+
+          <!-- Loading trigger element for infinite scrolling -->
+          <div 
+            ref="loadingTrigger" 
+            class="loading-trigger"
+            v-if="!hasAllTracks"
+          >
+            <div v-if="isLoadingMore || isStoreLoading" class="loading-indicator">
+              Loading more tracks...
             </div>
           </div>
         </div>
@@ -126,6 +136,95 @@
             <h3>Time Distribution by User</h3>
             <canvas ref="pieChart" width="400" height="400"></canvas>
           </div>
+
+          <div class="stats-chart">
+            <h3>Track Count by User</h3>
+            <canvas ref="barChart" width="400" height="400"></canvas>
+          </div>
+
+          <div class="stats-chart">
+            <h3>Cumulative Track Duration by Position</h3>
+            <canvas ref="lineChart" width="400" height="400"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div v-else-if="activeTab === 'playtimeShuffle'" class="tab-content">
+        <div class="shuffle-container">
+          <div class="shuffle-actions">
+            <button 
+              v-if="!isShuffling && !isShuffled" 
+              @click="shufflePlaylist" 
+              class="shuffle-button"
+            >
+              Shuffle
+            </button>
+            <template v-else-if="isShuffled">
+              <button 
+                @click="commitShuffledPlaylist" 
+                class="commit-button"
+                :disabled="isCommitting"
+              >
+                {{ isCommitting ? 'Committing...' : 'Commit' }}
+              </button>
+              <button 
+                @click="discardShuffledPlaylist" 
+                class="discard-button"
+                :disabled="isCommitting"
+              >
+                Discard
+              </button>
+            </template>
+            <div v-else class="shuffling-indicator">
+              Shuffling playlist...
+            </div>
+          </div>
+
+          <div v-if="shuffleStatus" class="shuffle-status">
+            {{ shuffleStatus }}
+          </div>
+
+          <div class="tracks-list">
+            <div v-for="(item, index) in displayedTracks" :key="index" class="track-item">
+              <div class="track-number">
+                {{ index + 1 }}
+              </div>
+              <div class="track-info-left">
+                <h4>
+                  <a 
+                    href="#" 
+                    @click.prevent="openSpotifyUrl(item.track.external_urls.spotify)"
+                    class="track-link"
+                  >
+                    {{ item.track.name }}
+                  </a>
+                </h4>
+                <p>
+                  <template v-for="(artist, i) in item.track.artists" :key="artist.id">
+                    <a 
+                      href="#" 
+                      @click.prevent="openSpotifyUrl(artist.external_urls.spotify)"
+                      class="artist-link"
+                    >
+                      {{ artist.name }}
+                    </a>{{ i < item.track.artists.length - 1 ? ', ' : '' }}
+                  </template>
+                </p>
+              </div>
+              <div class="track-info-right">
+                <p class="track-duration">{{ formatDuration(item.track.duration_ms) }}</p>
+                <p class="added-by">
+                  Added by: {{ getUserDisplayName(item.added_by) }}
+                  <img 
+                    v-if="userProfiles[item.added_by.id]?.images && (userProfiles[item.added_by.id]?.images || []).length > 0"
+                    :src="userProfiles[item.added_by.id]!.images![0].url"
+                    class="user-avatar"
+                    alt="User avatar"
+                  >
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -137,37 +236,72 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, watch, nextTick } from 'vue';
+import { ref, onMounted, computed, watch, nextTick, onUnmounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import type { SpotifyApi } from '../services/spotify';
 import { spotifyApiService } from '../services/spotify';
 import Chart from 'chart.js/auto';
 import SpotifyButton from './SpotifyButton.vue';
+import { usePlaylistStore } from '../stores/playlist';
 
 // State
 const route = useRoute();
 const router = useRouter();
+const playlistStore = usePlaylistStore();
 const loading = ref(true);
 const error = ref<string | null>(null);
 const playlist = ref<SpotifyApi.SinglePlaylistResponse | null>(null);
-const tracks = ref<SpotifyApi.PlaylistTrack[]>([]);
-const totalTracks = ref(0);
-const trackOffset = ref(0);
-const trackLimit = ref(50);
 const activeTab = ref('tracks');
 const userProfiles = ref<Record<string, SpotifyApi.UserProfile>>({});
 const pieChart = ref<HTMLCanvasElement | null>(null);
+const barChart = ref<HTMLCanvasElement | null>(null);
+const lineChart = ref<HTMLCanvasElement | null>(null);
 const chartInstance = ref<Chart | null>(null);
+const barChartInstance = ref<Chart | null>(null);
+const lineChartInstance = ref<Chart | null>(null);
+const isLoadingMore = ref(false);
+const observer = ref<IntersectionObserver | null>(null);
+const loadingTrigger = ref<HTMLElement | null>(null);
+
+// Playtime Shuffle state
+const isShuffling = ref(false);
+const isShuffled = ref(false);
+const isCommitting = ref(false);
+const shuffleStatus = ref<string | null>(null);
+const shuffledTracks = ref<SpotifyApi.PlaylistTrack[]>([]);
+const originalTracks = ref<SpotifyApi.PlaylistTrack[]>([]);
+const trackMoves = ref<{from: number, to: number}[]>([]);
 
 // Computed properties
+const tracks = computed(() => {
+  return playlist.value ? playlistStore.getPlaylistTracks(playlist.value.id) : [];
+});
+
+const totalTracks = computed(() => {
+  return playlist.value?.tracks.total || 0;
+});
+
+const hasAllTracks = computed(() => {
+  return playlist.value ? playlistStore.getHasAllTracks(playlist.value.id) : false;
+});
+
+const isStoreLoading = computed(() => {
+  return playlist.value ? playlistStore.getIsLoading(playlist.value.id) : false;
+});
+
 const totalDuration = computed(() => {
   return tracks.value.reduce((total, item) => total + item.track.duration_ms, 0);
+});
+
+// Displayed tracks based on whether we're showing shuffled tracks or original tracks
+const displayedTracks = computed(() => {
+    return isShuffled.value ? shuffledTracks.value : tracks.value;
 });
 
 const userDurations = computed(() => {
   const durations: Record<string, number> = {};
 
-  tracks.value.forEach(item => {
+  displayedTracks.value.forEach(item => {
     const userId = item.added_by.id;
     if (!durations[userId]) {
       durations[userId] = 0;
@@ -177,6 +311,82 @@ const userDurations = computed(() => {
 
   return durations;
 });
+
+// Computed property for track counts by user
+const userTrackCounts = computed(() => {
+  const counts: Record<string, number> = {};
+
+  displayedTracks.value.forEach(item => {
+    const userId = item.added_by.id;
+    if (!counts[userId]) {
+      counts[userId] = 0;
+    }
+    counts[userId]++;
+  });
+
+  return counts;
+});
+
+// Computed property for cumulative track durations by track number per user
+const cumulativeTrackDurations = computed(() => {
+  const userDurationsByTrack: Record<string, number[]> = {};
+
+  // Initialize arrays for each user
+  const userIds = new Set<string>();
+  displayedTracks.value.forEach(item => userIds.add(item.added_by.id));
+
+  userIds.forEach(userId => {
+    userDurationsByTrack[userId] = [];
+  });
+
+  // Sort tracks by their position in the playlist
+  const sortedTracks = [...displayedTracks.value].sort((a, b) => {
+    return (a.track.track_number || 0) - (b.track.track_number || 0);
+  });
+
+  // Calculate cumulative durations for each user
+  sortedTracks.forEach((item, index) => {
+    const userId = item.added_by.id;
+    const previousDuration = index > 0 ? userDurationsByTrack[userId][index - 1] || 0 : 0;
+    userDurationsByTrack[userId][index] = previousDuration + item.track.duration_ms;
+
+    // Fill in zeros for other users at this track position
+    userIds.forEach(id => {
+      if (id !== userId && userDurationsByTrack[id][index] === undefined) {
+        userDurationsByTrack[id][index] = userDurationsByTrack[id][index - 1] || 0;
+      }
+    });
+  });
+
+  return userDurationsByTrack;
+});
+
+// Setup intersection observer for infinite scrolling
+function setupInfiniteScroll() {
+  // Disconnect previous observer if it exists
+  if (observer.value) {
+    observer.value.disconnect();
+  }
+
+  // Create a new IntersectionObserver
+  observer.value = new IntersectionObserver(async (entries) => {
+    // If the loading trigger is visible and we're not already loading more
+    if (entries[0].isIntersecting && !isLoadingMore.value && !isStoreLoading.value && playlist.value) {
+      await loadMoreTracks();
+    }
+  }, {
+    root: null, // Use the viewport as the root
+    rootMargin: '0px',
+    threshold: 0.1 // Trigger when 10% of the element is visible
+  });
+
+  // Start observing the loading trigger element
+  nextTick(() => {
+    if (loadingTrigger.value && observer.value) {
+      observer.value.observe(loadingTrigger.value);
+    }
+  });
+}
 
 // Load playlist on component mount
 onMounted(async () => {
@@ -188,6 +398,7 @@ onMounted(async () => {
 
   try {
     await fetchPlaylist(playlistId);
+    setupInfiniteScroll();
   } catch (err) {
     handleError(err);
   } finally {
@@ -195,19 +406,43 @@ onMounted(async () => {
   }
 });
 
-// Watch for tab changes to update the chart
-watch(activeTab, async (newTab) => {
-  if (newTab === 'stats') {
-    await nextTick();
-    renderPieChart();
+// Cleanup on component unmount
+onUnmounted(() => {
+  if (observer.value) {
+    observer.value.disconnect();
   }
 });
 
-// Watch for tracks changes to update user profiles and chart
+// Watch for tab changes to update the charts and load all tracks if needed
+watch(activeTab, async (newTab) => {
+  if (newTab === 'stats' && playlist.value) {
+    // Load all tracks if we're viewing stats and don't have all tracks yet
+    if (!hasAllTracks.value) {
+      try {
+        loading.value = true;
+        await playlistStore.loadAllPlaylistTracks(playlist.value.id);
+        await fetchUserProfiles();
+      } catch (err) {
+        handleError(err);
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    await nextTick();
+    renderPieChart();
+    renderBarChart();
+    renderLineChart();
+  }
+});
+
+// Watch for tracks changes to update user profiles and charts
 watch(tracks, async () => {
   await fetchUserProfiles();
   if (activeTab.value === 'stats') {
     renderPieChart();
+    renderBarChart();
+    renderLineChart();
   }
 });
 
@@ -220,14 +455,8 @@ async function fetchPlaylist(playlistId: string) {
     const playlistData = await spotifyApiService.getPlaylist(playlistId);
     playlist.value = playlistData;
 
-    // Set tracks from the initial response
-    tracks.value = playlistData.tracks.items;
-    totalTracks.value = playlistData.tracks.total;
-
-    // If there are more tracks than what's in the initial response, we need to fetch them separately
-    if (playlistData.tracks.total > tracks.value.length) {
-      await fetchPlaylistTracks(playlistId);
-    }
+    // Load initial tracks from the store
+    await playlistStore.loadPlaylistTracks(playlistId, 50, 0, false);
 
     // Fetch user profiles for the tracks
     await fetchUserProfiles();
@@ -238,44 +467,28 @@ async function fetchPlaylist(playlistId: string) {
   }
 }
 
-// Fetch playlist tracks with pagination
-async function fetchPlaylistTracks(playlistId: string) {
-  if (!playlist.value) return;
+// Load more tracks for infinite scrolling
+async function loadMoreTracks() {
+  if (!playlist.value || isLoadingMore.value || hasAllTracks.value) return;
 
   try {
-    loading.value = true;
+    isLoadingMore.value = true;
+    const currentTracks = tracks.value;
 
-    const response = await spotifyApiService.getPlaylistTracks(
-      playlistId,
-      trackLimit.value,
-      trackOffset.value
+    // Load the next batch of tracks
+    await playlistStore.loadPlaylistTracks(
+      playlist.value.id,
+      50,
+      currentTracks.length,
+      true
     );
 
-    tracks.value = response.items;
-    totalTracks.value = response.total;
+    // Fetch user profiles for the new tracks
+    await fetchUserProfiles();
   } catch (err) {
     handleError(err);
   } finally {
-    loading.value = false;
-  }
-}
-
-// Pagination handlers for tracks
-function fetchNextTracks() {
-  if (!playlist.value) return;
-
-  if (trackOffset.value + trackLimit.value < totalTracks.value) {
-    trackOffset.value += trackLimit.value;
-    fetchPlaylistTracks(playlist.value.id);
-  }
-}
-
-function fetchPreviousTracks() {
-  if (!playlist.value) return;
-
-  if (trackOffset.value > 0) {
-    trackOffset.value = Math.max(0, trackOffset.value - trackLimit.value);
-    fetchPlaylistTracks(playlist.value.id);
+    isLoadingMore.value = false;
   }
 }
 
@@ -374,6 +587,134 @@ function renderPieChart() {
   });
 }
 
+// Render bar chart for track count by user
+function renderBarChart() {
+  if (!barChart.value) return;
+
+  // Destroy previous chart instance if it exists
+  if (barChartInstance.value) {
+    barChartInstance.value.destroy();
+  }
+
+  const ctx = barChart.value.getContext('2d');
+  if (!ctx) return;
+
+  const counts = userTrackCounts.value;
+  const labels = Object.keys(counts).map(userId => {
+    return getUserDisplayName({ id: userId, display_name: null, external_urls: { spotify: '' }, href: '', type: 'user', uri: '' });
+  });
+
+  const data = Object.values(counts);
+
+  // Generate random colors for each user
+  const colors = Object.keys(counts).map(() => {
+    return `hsl(${Math.random() * 360}, 70%, 50%)`;
+  });
+
+  barChartInstance.value = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Track Count',
+        data,
+        backgroundColor: colors,
+        borderColor: colors,
+        borderWidth: 1
+      }]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        y: {
+          beginAtZero: true,
+          ticks: {
+            precision: 0 // Only show whole numbers
+          }
+        }
+      },
+      plugins: {
+        legend: {
+          display: false
+        },
+        tooltip: {
+          callbacks: {
+            label: (context) => {
+              const value = context.raw as number;
+              const percentage = ((value / totalTracks.value) * 100).toFixed(1);
+              return `${context.label}: ${value} tracks (${percentage}%)`;
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+// Render line chart for cumulative track duration by track number per user
+function renderLineChart() {
+  if (!lineChart.value) return;
+
+  // Destroy previous chart instance if it exists
+  if (lineChartInstance.value) {
+    lineChartInstance.value.destroy();
+  }
+
+  const ctx = lineChart.value.getContext('2d');
+  if (!ctx) return;
+
+  const cumulativeDurations = cumulativeTrackDurations.value;
+  const userIds = Object.keys(cumulativeDurations);
+
+  // Generate labels for track numbers (1, 2, 3, ...)
+  const maxTrackCount = Math.max(...userIds.map(userId => cumulativeDurations[userId].length));
+  const labels = Array.from({ length: maxTrackCount }, (_, i) => `${i + 1}`);
+
+  // Generate datasets for each user
+  const datasets = userIds.map(userId => {
+    const color = `hsl(${Math.random() * 360}, 70%, 50%)`;
+    const displayName = getUserDisplayName({ id: userId, display_name: null, external_urls: { spotify: '' }, href: '', type: 'user', uri: '' });
+
+    return {
+      label: displayName,
+      data: cumulativeDurations[userId],
+      borderColor: color,
+      backgroundColor: color,
+      fill: false,
+      tension: 0.1
+    };
+  });
+
+  lineChartInstance.value = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets
+    },
+    options: {
+      responsive: true,
+      scales: {
+        y: {
+          beginAtZero: true,
+          ticks: {
+            callback: (value) => formatDuration(value as number)
+          }
+        }
+      },
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (context) => {
+              const value = context.raw as number;
+              return `${context.dataset.label}: ${formatDuration(value)}`;
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
 // Open Spotify URL in a new tab
 function openSpotifyUrl(url: string) {
   window.open(url, '_blank');
@@ -387,6 +728,176 @@ function handleError(err: unknown) {
   } else {
     error.value = 'An unknown error occurred';
   }
+}
+
+// Playtime Shuffle methods
+
+/**
+ * Shuffles the playlist using the special algorithm
+ * that balances track time among users
+ */
+async function shufflePlaylist() {
+  if (!playlist.value || isShuffling.value) return;
+
+  try {
+    isShuffling.value = true;
+    shuffleStatus.value = "Loading all tracks...";
+
+    // Make sure we have all tracks
+    if (!hasAllTracks.value) {
+      await playlistStore.loadAllPlaylistTracks(playlist.value.id);
+      await fetchUserProfiles();
+    }
+
+    // Store original tracks
+    originalTracks.value = [...tracks.value];
+
+    // Initialize shuffled tracks with a copy of the original tracks
+    shuffledTracks.value = [...tracks.value];
+
+    shuffleStatus.value = "Calculating user playtimes...";
+
+    // Calculate initial user playtimes
+    const userPlaytimes: Record<string, number> = {};
+    const userTrackCounts: Record<string, number> = {};
+
+    // Initialize user playtimes to 0
+    tracks.value.forEach(item => {
+      const userId = item.added_by.id;
+      if (!userPlaytimes[userId]) {
+        userPlaytimes[userId] = 0;
+        userTrackCounts[userId] = -1;
+      }
+    });
+
+    // Track the moves for later use with the Spotify API
+    trackMoves.value = [];
+
+    // Shuffle the playlist
+    shuffleStatus.value = "Shuffling playlist...";
+
+    const remaining = [...shuffledTracks.value];
+
+    // For each position in the result playlist
+    for (let currentIndex = 0; currentIndex < originalTracks.value.length; currentIndex++) {
+      // Find users with the minimum playtime
+      const minPlaytime = Math.min(...Object.values(userPlaytimes));
+      const usersWithMinPlaytime = Object.keys(userPlaytimes).filter(
+        userId => (userTrackCounts[userId] == -1 || userTrackCounts[userId] > 0) && userPlaytimes[userId] === minPlaytime // Track count -1 => not yet used
+      );
+
+      // Randomly select a user from those with minimum playtime
+      const selectedUserId = usersWithMinPlaytime[Math.floor(Math.random() * usersWithMinPlaytime.length)];
+
+      // Find tracks from this user
+      const userTracks = remaining.filter(item => item.added_by.id === selectedUserId);
+      userTrackCounts[selectedUserId] = userTracks.length;
+
+      let selectedTrack: SpotifyApi.PlaylistTrack;
+      if (userTracks.length === 0) {
+        // If no tracks from this user, select a random track
+        const randomIndex = Math.floor(Math.random() * remaining.length);
+        selectedTrack = remaining[randomIndex];
+      } else {
+        // Randomly select a track from this user
+        const randomUserTrackIndex = Math.floor(Math.random() * userTracks.length);
+        selectedTrack = userTracks[randomUserTrackIndex];
+        userTrackCounts[selectedUserId]--;
+      }
+
+      // Update shuffled tracks with the selected track
+      const shuffledIndex = shuffledTracks.value.findIndex(
+          item => item.track.id === selectedTrack.track.id
+      );
+      shuffledTracks.value.splice(currentIndex, 0, selectedTrack);
+      shuffledTracks.value.splice(shuffledIndex + 1, 1);
+
+      // Remove the track from remaining
+      const selectedTrackIndex = remaining.findIndex(
+          item => item.track.id === selectedTrack.track.id
+      );
+      remaining.splice(selectedTrackIndex, 1);
+
+      // Update playtimes for all users
+      const trackDuration = selectedTrack.track.duration_ms;
+
+      // Increase playtime for the selected user
+      userPlaytimes[selectedUserId] += trackDuration;
+
+      // Decrease playtime for all other users
+      Object.keys(userPlaytimes).forEach(userId => {
+        if (userId !== selectedUserId) {
+          userPlaytimes[userId] -= trackDuration;
+        }
+      });
+
+      // Record the move
+      trackMoves.value.push({ from: shuffledIndex, to: currentIndex });
+    }
+
+    // Update status
+    isShuffled.value = true;
+    shuffleStatus.value = "Playlist shuffled successfully!";
+  } catch (err) {
+    handleError(err);
+    shuffleStatus.value = "Error shuffling playlist.";
+  } finally {
+    isShuffling.value = false;
+  }
+}
+
+/**
+ * Commits the shuffled playlist to Spotify
+ */
+async function commitShuffledPlaylist() {
+  if (!playlist.value || !isShuffled.value || isCommitting.value) return;
+
+  try {
+    isCommitting.value = true;
+    shuffleStatus.value = "Committing changes to Spotify...";
+
+    // Use the reorderPlaylistTracks method to apply each move
+    let snapshotId = playlist.value.snapshot_id;
+    for (const move of trackMoves.value) {
+      snapshotId = (await spotifyApiService.reorderPlaylistTracks(
+          playlist.value.id,
+          move.from,
+          move.to, 1, snapshotId
+      )).snapshot_id;
+    }
+
+    // Update the original tracks to match the shuffled tracks
+    originalTracks.value = [...shuffledTracks.value];
+
+    // Clear the playlist store cache to force a refresh on next load
+    // playlistStore.clearTracks(playlist.value.id);
+    playlistStore.playlistTracks[playlist.value.id] = originalTracks.value;
+
+    shuffleStatus.value = "Changes committed successfully!";
+
+    // Reset shuffle state
+    isShuffled.value = false;
+    trackMoves.value = [];
+  } catch (err) {
+    handleError(err);
+    shuffleStatus.value = "Error committing changes.";
+  } finally {
+    isCommitting.value = false;
+  }
+}
+
+/**
+ * Discards the shuffled playlist and reverts to the original
+ */
+function discardShuffledPlaylist() {
+  if (!isShuffled.value || isCommitting.value) return;
+
+  // Reset shuffle state
+  isShuffled.value = false;
+  shuffledTracks.value = [];
+  originalTracks.value = [];
+  trackMoves.value = [];
+  shuffleStatus.value = null;
 }
 </script>
 
@@ -542,17 +1053,38 @@ function handleError(err: unknown) {
   border-bottom: 1px solid var(--color-surface);
 }
 
-.track-info {
-  flex: 1;
+.track-number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  margin-right: 10px;
+  color: var(--color-textSecondary);
+  font-size: 14px;
 }
 
-.track-info h4 {
+.track-info-left {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.track-info-right {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 150px;
+}
+
+.track-info-left h4 {
   margin: 0 0 5px 0;
   font-size: 16px;
   color: var(--color-textPrimary);
 }
 
-.track-info p {
+.track-info-left p, .track-info-right p {
   margin: 0;
   font-size: 14px;
   color: var(--color-textSecondary);
@@ -561,15 +1093,15 @@ function handleError(err: unknown) {
 .track-duration {
   color: var(--color-textSecondary);
   font-size: 12px;
-  margin-top: 2px !important;
+  margin-bottom: 5px !important;
 }
 
 .added-by {
   font-size: 12px !important;
   color: var(--color-textSecondary) !important;
-  margin-top: 5px !important;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 5px;
 }
 
@@ -614,6 +1146,37 @@ function handleError(err: unknown) {
   color: var(--color-textSecondary);
 }
 
+.tracks-info {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 5px 10px;
+  color: var(--color-textSecondary);
+  font-size: 14px;
+}
+
+.loading-trigger {
+  padding: 20px;
+  text-align: center;
+}
+
+.loading-indicator {
+  display: inline-block;
+  padding: 10px 20px;
+  background-color: var(--color-surface);
+  border-radius: 20px;
+  color: var(--color-textSecondary);
+  font-size: 14px;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 0.6; }
+  50% { opacity: 1; }
+  100% { opacity: 0.6; }
+}
+
 .back-navigation {
   margin-bottom: 20px;
 }
@@ -647,5 +1210,77 @@ function handleError(err: unknown) {
 .track-link:hover, .artist-link:hover {
   color: #1ED760;
   text-decoration: underline;
+}
+
+/* Playtime Shuffle styles */
+.shuffle-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.shuffle-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-start;
+  margin-bottom: 10px;
+}
+
+.shuffle-button, .commit-button, .discard-button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 4px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.shuffle-button {
+  background-color: var(--color-accent);
+  color: var(--color-textPrimary);
+}
+
+.shuffle-button:hover {
+  background-color: var(--color-gradientStart);
+}
+
+.commit-button {
+  background-color: #1DB954; /* Spotify green */
+  color: white;
+}
+
+.commit-button:hover:not(:disabled) {
+  background-color: #1ED760;
+}
+
+.discard-button {
+  background-color: #E74C3C; /* Red */
+  color: white;
+}
+
+.discard-button:hover:not(:disabled) {
+  background-color: #FF5E52;
+}
+
+.commit-button:disabled, .discard-button:disabled {
+  background-color: var(--color-surface);
+  color: var(--color-textSecondary);
+  cursor: not-allowed;
+}
+
+.shuffling-indicator {
+  padding: 10px 20px;
+  background-color: var(--color-surface);
+  border-radius: 4px;
+  color: var(--color-textSecondary);
+  animation: pulse 1.5s infinite;
+}
+
+.shuffle-status {
+  padding: 10px;
+  background-color: var(--color-surface);
+  border-radius: 4px;
+  color: var(--color-textPrimary);
+  margin-bottom: 10px;
 }
 </style>
