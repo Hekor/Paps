@@ -415,7 +415,7 @@ onUnmounted(() => {
 
 // Watch for tab changes to update the charts and load all tracks if needed
 watch(activeTab, async (newTab) => {
-  if (newTab === 'stats' && playlist.value) {
+  if ((newTab === 'stats' || newTab == 'playtimeShuffle') && playlist.value) {
     // Load all tracks if we're viewing stats and don't have all tracks yet
     if (!hasAllTracks.value) {
       try {
@@ -430,9 +430,11 @@ watch(activeTab, async (newTab) => {
     }
 
     await nextTick();
-    renderPieChart();
-    renderBarChart();
-    renderLineChart();
+    if (newTab === 'stats') {
+      renderPieChart();
+      renderBarChart();
+      renderLineChart();
+    }
   }
 });
 
