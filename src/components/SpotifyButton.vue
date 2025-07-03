@@ -45,7 +45,7 @@ function openSpotifyUrl(event: Event) {
 }
 
 .spotify-icon {
-  width: 12px;
-  height: 12px;
+  width: 21px;
+  height: 21px;
 }
 </style>

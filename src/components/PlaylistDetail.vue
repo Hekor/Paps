@@ -132,19 +132,21 @@
             </div>
           </div>
 
-          <div class="stats-chart">
-            <h3>Time Distribution by User</h3>
-            <canvas ref="pieChart" width="400" height="400"></canvas>
+          <div class="charts-row">
+            <div class="stats-chart">
+              <h3>Time Distribution by User</h3>
+              <canvas ref="pieChart" width="400" height="400"></canvas>
+            </div>
+
+            <div class="stats-chart">
+              <h3>Track Count by User</h3>
+              <canvas ref="barChart" width="400" height="400"></canvas>
+            </div>
           </div>
 
-          <div class="stats-chart">
-            <h3>Track Count by User</h3>
-            <canvas ref="barChart" width="400" height="400"></canvas>
-          </div>
-
-          <div class="stats-chart">
+          <div class="stats-chart line-chart">
             <h3>Cumulative Track Duration by Position</h3>
-            <canvas ref="lineChart" width="400" height="400"></canvas>
+            <canvas ref="lineChart" width="800" height="400"></canvas>
           </div>
         </div>
       </div>
@@ -262,6 +264,7 @@ const lineChartInstance = ref<Chart | null>(null);
 const isLoadingMore = ref(false);
 const observer = ref<IntersectionObserver | null>(null);
 const loadingTrigger = ref<HTMLElement | null>(null);
+const userColors = ref<Record<string, string>>({});
 
 // Playtime Shuffle state
 const isShuffling = ref(false);
@@ -339,13 +342,8 @@ const cumulativeTrackDurations = computed(() => {
     userDurationsByTrack[userId] = [];
   });
 
-  // Sort tracks by their position in the playlist
-  const sortedTracks = [...displayedTracks.value].sort((a, b) => {
-    return (a.track.track_number || 0) - (b.track.track_number || 0);
-  });
-
   // Calculate cumulative durations for each user
-  sortedTracks.forEach((item, index) => {
+  displayedTracks.value.forEach((item, index) => {
     const userId = item.added_by.id;
     const previousDuration = index > 0 ? userDurationsByTrack[userId][index - 1] || 0 : 0;
     userDurationsByTrack[userId][index] = previousDuration + item.track.duration_ms;
@@ -527,6 +525,74 @@ function getUserDisplayName(user: SpotifyApi.UserProfile): string {
   return user.display_name || user.id;
 }
 
+// Get a consistent color for a user
+function getUserColor(userId: string): string {
+  // If we already have a color for this user, return it
+  if (userColors.value[userId]) {
+    return userColors.value[userId];
+  }
+
+  // Predefined array of visually distinct colors
+  const distinctColors = [
+    'hsl(0, 80%, 50%)',      // Red
+    'hsl(210, 80%, 50%)',    // Blue
+    'hsl(120, 80%, 50%)',    // Green
+    'hsl(48, 90%, 50%)',     // Gold
+    'hsl(300, 80%, 50%)',    // Purple
+    'hsl(180, 80%, 50%)',    // Teal
+    'hsl(30, 90%, 60%)',     // Orange
+    'hsl(270, 80%, 60%)',    // Violet
+    'hsl(150, 80%, 40%)',    // Emerald
+    'hsl(330, 90%, 60%)',    // Pink
+    'hsl(90, 80%, 40%)',     // Lime
+    'hsl(240, 80%, 70%)',    // Light Blue
+  ];
+
+  // Get the count of existing colors
+  const existingColorCount = Object.keys(userColors.value).length;
+
+  // If we have fewer users than distinct colors, use the predefined colors
+  if (existingColorCount < distinctColors.length) {
+    const color = distinctColors[existingColorCount];
+    userColors.value[userId] = color;
+    return color;
+  }
+
+  // For additional users, generate a deterministic but distinct color
+  let hash = 0;
+  for (let i = 0; i < userId.length; i++) {
+    hash = userId.charCodeAt(i) + ((hash << 5) - hash);
+  }
+
+  // Generate a hue that's spaced out from existing hues
+  const baseHue = Math.abs(hash % 360);
+  const existingHues = Object.values(userColors.value)
+    .map(color => parseInt(color.match(/hsl\((\d+)/)?.[1] || '0'));
+
+  // Find a hue that's at least 30 degrees away from any existing hue
+  let hue = baseHue;
+  let attempts = 0;
+  const maxAttempts = 12;
+
+  while (attempts < maxAttempts && 
+         existingHues.some(h => Math.abs(h - hue) < 30 || Math.abs(h - hue) > 330)) {
+    hue = (hue + 83) % 360; // Use a prime number to get good distribution
+    attempts++;
+  }
+
+  // Vary saturation and lightness based on the hash to further differentiate
+  const saturation = 70 + (hash % 20);
+  const lightness = 45 + (hash % 15);
+
+  // Create the color with varied saturation and lightness
+  const color = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+
+  // Store the color for future use
+  userColors.value[userId] = color;
+
+  return color;
+}
+
 // Format duration from milliseconds to MM:SS
 function formatDuration(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
@@ -548,16 +614,15 @@ function renderPieChart() {
   if (!ctx) return;
 
   const durations = userDurations.value;
-  const labels = Object.keys(durations).map(userId => {
+  const userIds = Object.keys(durations);
+  const labels = userIds.map(userId => {
     return getUserDisplayName({ id: userId, display_name: null, external_urls: { spotify: '' }, href: '', type: 'user', uri: '' });
   });
 
   const data = Object.values(durations);
 
-  // Generate random colors for each user
-  const colors = Object.keys(durations).map(() => {
-    return `hsl(${Math.random() * 360}, 70%, 50%)`;
-  });
+  // Get consistent colors for each user
+  const colors = userIds.map(userId => getUserColor(userId));
 
   chartInstance.value = new Chart(ctx, {
     type: 'pie',
@@ -602,16 +667,15 @@ function renderBarChart() {
   if (!ctx) return;
 
   const counts = userTrackCounts.value;
-  const labels = Object.keys(counts).map(userId => {
+  const userIds = Object.keys(counts);
+  const labels = userIds.map(userId => {
     return getUserDisplayName({ id: userId, display_name: null, external_urls: { spotify: '' }, href: '', type: 'user', uri: '' });
   });
 
   const data = Object.values(counts);
 
-  // Generate random colors for each user
-  const colors = Object.keys(counts).map(() => {
-    return `hsl(${Math.random() * 360}, 70%, 50%)`;
-  });
+  // Get consistent colors for each user
+  const colors = userIds.map(userId => getUserColor(userId));
 
   barChartInstance.value = new Chart(ctx, {
     type: 'bar',
@@ -674,7 +738,7 @@ function renderLineChart() {
 
   // Generate datasets for each user
   const datasets = userIds.map(userId => {
-    const color = `hsl(${Math.random() * 360}, 70%, 50%)`;
+    const color = getUserColor(userId);
     const displayName = getUserDisplayName({ id: userId, display_name: null, external_urls: { spotify: '' }, href: '', type: 'user', uri: '' });
 
     return {
@@ -1137,10 +1201,29 @@ function discardShuffledPlaylist() {
   color: var(--color-accent);
 }
 
+.charts-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+}
+
 .stats-chart {
   margin: 0 auto;
-  max-width: 600px;
+  max-width: 400px;
   text-align: center;
+}
+
+.charts-row .stats-chart {
+  flex: 1;
+  max-width: 48%;
+}
+
+.line-chart {
+  max-width: 100%;
+}
+
+.stats-chart.line-chart {
+  margin: 0;
 }
 
 .stats-chart h3 {
@@ -1187,15 +1270,17 @@ function discardShuffledPlaylist() {
   display: inline-block;
   margin-top: 0;
   padding: 10px 20px;
-  background-color: var(--color-accent);
+  background-color: transparent;
   color: var(--color-textPrimary);
   text-decoration: none;
+  border: 1px solid var(--color-surface);
   border-radius: 4px;
-  transition: background-color 0.2s;
+  transition: all 0.2s;
 }
 
 .back-button:hover {
-  background-color: var(--color-gradientStart);
+  background-color: var(--color-surface);
+  border-color: var(--color-accent);
 }
 
 .not-found .back-button {

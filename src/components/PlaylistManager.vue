@@ -10,8 +10,6 @@
     </div>
 
     <div v-else>
-      <h2>Your Playlists</h2>
-
       <div class="pagination">
         <button 
           :disabled="playlistOffset === 0" 

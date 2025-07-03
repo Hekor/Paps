@@ -18,5 +18,5 @@ body {
 }
 
 #app {
-  @apply max-w-7xl mx-auto;
+  @apply mx-auto;
 }

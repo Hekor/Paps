@@ -32,8 +32,8 @@ const handleLogout = () => {
 </script>
 
 <template>
-  <header class="bg-surface shadow-md">
-    <div class="container mx-auto px-4 py-3 flex items-center justify-between">
+  <header class="bg-surface shadow-md w-full">
+    <div class="max-w-screen-xl mx-auto px-4 py-3 flex items-center justify-between">
       <!-- Logo and App Name -->
       <div class="flex items-center">
         <router-link to="/" class="flex items-center">
